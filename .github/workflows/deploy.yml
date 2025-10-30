@@ -23,11 +23,11 @@ jobs:
         #  python-version: '3.11'  # Change to your Python version
 
       # Use system Python directly
-#      - name: Check Python version
-#        run: |
-#          python --version
-#        shell: powershell
-      
+      - name: Check Python version
+        run: |
+          python --version
+        shell: powershell
+
       # Step 3: Install dependencies
       - name: Install dependencies
         run: |
