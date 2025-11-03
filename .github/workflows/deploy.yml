@@ -77,4 +77,4 @@ jobs:
 
       - name: Verify locally with curl
         run: |
-          curl -f http://localhost:8000 || (echo "Local curl to :8000 failed" && exit 1)
+          curl -f http://13.201.23.122:8000 || (echo "Local curl to :8000 failed" && exit 1)
