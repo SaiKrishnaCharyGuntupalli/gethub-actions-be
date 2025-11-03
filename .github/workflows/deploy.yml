@@ -1,46 +1,80 @@
 name: Deploy FastAPI to EC2
 
-# Trigger: Run on push to main branch
 on:
   push:
     branches:
       - main
 
-# Jobs to execute
 jobs:
   deploy:
-    runs-on: self-hosted  # Use your EC2 runner
-    
+    runs-on: self-hosted
+
     steps:
-      # Step 1: Get the latest code
       - name: Checkout code
         uses: actions/checkout@v3
-      
-      # Step 2: Set up Python environment
-      - name: Set up Python
+
+      - name: Ensure target directory exists and copy code
+        run: |
+          sudo rm -rf /opt/fastapi_app
+          sudo mkdir -p /opt/fastapi_app
+          # copy repo contents to /opt/fastapi_app
+          sudo cp -R . /opt/fastapi_app/
+          sudo chown -R $(whoami):$(whoami) /opt/fastapi_app
+
+      - name: Set up Python (used to create venv in /opt/fastapi_app)
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      
-      # Step 3: Install dependencies
-      - name: Install dependencies
+
+      - name: Create virtualenv and install requirements
         run: |
-          python3 -m pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      # Step 4: Stop existing FastAPI process (if running)
-      - name: Stop existing application
+          python3 -m venv /opt/fastapi_app/venv
+          /opt/fastapi_app/venv/bin/pip install --upgrade pip
+          /opt/fastapi_app/venv/bin/pip install -r /opt/fastapi_app/requirements.txt
+
+      - name: Stop existing systemd service if present
         run: |
-          pkill -f "uvicorn app.main:app" || true
+          if sudo systemctl is-active --quiet fastapi.service; then
+            sudo systemctl stop fastapi.service || true
+          fi
         continue-on-error: true
-      
-      # Step 5: Start FastAPI application
-      - name: Start FastAPI application
+
+      - name: Install systemd service file
         run: |
-          nohup uvicorn main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+          # create the systemd unit file
+          sudo tee /etc/systemd/system/fastapi.service > /dev/null <<'EOF'
+          [Unit]
+          Description=FastAPI app (Uvicorn)
+          After=network.target
+
+          [Service]
+          WorkingDirectory=/opt/fastapi_app
+          ExecStart=/opt/fastapi_app/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4 --chdir /opt/fastapi_app
+          Restart=always
+          RestartSec=5
+          LimitNOFILE=65535
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          # ensure the file is readable
+          sudo chmod 644 /etc/systemd/system/fastapi.service
+
+      - name: Reload systemd, enable and start service
+        run: |
+          sudo systemctl daemon-reload
+          sudo systemctl enable fastapi.service
+          sudo systemctl restart fastapi.service
+          # Wait a few seconds for the app to start
           sleep 5
-      
-      # Step 6: Verify deployment
-      - name: Check if application is running
+
+      - name: Check systemd status (for logs if something failed)
         run: |
-          curl -f http://localhost:8000 || exit 1
+          sudo systemctl --no-pager status fastapi.service || true
+          echo "Last 200 lines of journal for the service:"
+          sudo journalctl -u fastapi.service -n 200 --no-pager || true
+
+      - name: Verify locally with curl
+        run: |
+          curl -f http://localhost:8000 || (echo "Local curl to :8000 failed" && exit 1)
