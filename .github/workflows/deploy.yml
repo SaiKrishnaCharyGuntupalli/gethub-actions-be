@@ -1,4 +1,4 @@
-name: Deploy FastAPI to EC2
+name: Deploy FastAPI + React to EC2
 
 on:
   push:
@@ -10,71 +10,148 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # ============================================
+      # STEP 1: Checkout Code
+      # ============================================
+      # This pulls your latest code from GitHub to the runner
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # ============================================
+      # STEP 2: Setup Directories
+      # ============================================
+      # Clean and create fresh deployment directory
       - name: Ensure target directory exists and copy code
         run: |
           sudo rm -rf /opt/fastapi_app
           sudo mkdir -p /opt/fastapi_app
-          # copy repo contents to /opt/fastapi_app
+          # Copy entire repo to deployment directory
           sudo cp -R . /opt/fastapi_app/
+          # Set proper ownership
           sudo chown -R $(whoami):$(whoami) /opt/fastapi_app
 
-      - name: Set up Python (used to create venv in /opt/fastapi_app)
+      # ============================================
+      # BACKEND DEPLOYMENT (FastAPI)
+      # ============================================
+
+      # STEP 3: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      # STEP 4: Create Python Virtual Environment
+      # This isolates Python dependencies for your FastAPI app
       - name: Create virtualenv and install requirements
         run: |
           python3 -m venv /opt/fastapi_app/venv
           /opt/fastapi_app/venv/bin/pip install --upgrade pip
-          /opt/fastapi_app/venv/bin/pip install -r /opt/fastapi_app/requirements.txt
+          /opt/fastapi_app/venv/bin/pip install -r /opt/fastapi_app/backend/requirements.txt
 
-      - name: Stop existing systemd service if present
+      # STEP 5: Stop Old FastAPI Service
+      - name: Stop existing FastAPI service if present
         run: |
           if sudo systemctl is-active --quiet fastapi.service; then
             sudo systemctl stop fastapi.service || true
           fi
         continue-on-error: true
 
-      - name: Install systemd service file
+      # STEP 6: Install FastAPI Systemd Service
+      # This makes FastAPI run as a background service that auto-starts on reboot
+      - name: Install systemd service file for FastAPI
         run: |
-          # create the systemd unit file
           sudo tee /etc/systemd/system/fastapi.service > /dev/null <<'EOF'
           [Unit]
           Description=FastAPI app (Uvicorn)
           After=network.target
 
           [Service]
-          WorkingDirectory=/opt/fastapi_app
-          ExecStart=/opt/fastapi_app/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+          WorkingDirectory=/opt/fastapi_app/backend
+          ExecStart=/opt/fastapi_app/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 4
           Restart=always
           RestartSec=5
           LimitNOFILE=65535
+          User=ubuntu
+          Group=ubuntu
 
           [Install]
           WantedBy=multi-user.target
           EOF
-
-          # ensure the file is readable
           sudo chmod 644 /etc/systemd/system/fastapi.service
 
-      - name: Reload systemd, enable and start service
+      # STEP 7: Start FastAPI Service
+      - name: Reload systemd, enable and start FastAPI service
         run: |
           sudo systemctl daemon-reload
           sudo systemctl enable fastapi.service
           sudo systemctl restart fastapi.service
-          # Wait a few seconds for the app to start
           sleep 5
 
-      - name: Check systemd status (for logs if something failed)
+      # STEP 8: Verify FastAPI is Running
+      - name: Check FastAPI status
         run: |
           sudo systemctl --no-pager status fastapi.service || true
-          echo "Last 200 lines of journal for the service:"
-          sudo journalctl -u fastapi.service -n 200 --no-pager || true
+          echo "Last 20 lines of journal for FastAPI service:"
+          sudo journalctl -u fastapi.service -n 20 --no-pager || true
 
-      - name: Verify locally with curl
+      - name: Verify FastAPI locally with curl
         run: |
-          curl -f http://localhost:8000 || (echo "Local curl to :8000 failed" && exit 1)
+          curl -f http://localhost:8000 || (echo "FastAPI curl to :8000 failed" && exit 1)
+
+      # ============================================
+      # FRONTEND DEPLOYMENT (React)
+      # ============================================
+
+      # STEP 9: Setup Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      # STEP 10: Install React Dependencies
+      # This installs all packages listed in package.json
+      - name: Install frontend dependencies
+        working-directory: /opt/fastapi_app/frontend
+        run: |
+          npm ci --prefer-offline --no-audit
+
+      # STEP 11: Build React App
+      # This creates optimized production files in the 'build' folder
+      - name: Build React app
+        working-directory: /opt/fastapi_app/frontend
+        run: |
+          npm run build
+
+      # STEP 12: Set Permissions for Nginx
+      # Nginx needs to read the build files
+      - name: Set correct permissions for frontend build
+        run: |
+          sudo chown -R www-data:www-data /opt/fastapi_app/frontend/build
+          sudo chmod -R 755 /opt/fastapi_app/frontend/build
+
+      # STEP 13: Restart Nginx
+      # This makes Nginx serve the new React build
+      - name: Restart Nginx
+        run: |
+          sudo systemctl restart nginx
+
+      # STEP 14: Verify Nginx is Running
+      - name: Check Nginx status
+        run: |
+          sudo systemctl --no-pager status nginx || true
+
+      # ============================================
+      # FINAL VERIFICATION
+      # ============================================
+
+      # STEP 15: Test Complete Deployment
+      - name: Final verification
+        run: |
+          echo "Testing FastAPI..."
+          curl -f http://localhost:8000 || echo "FastAPI check failed"
+          
+          echo "Testing Nginx (React app)..."
+          curl -f http://localhost || echo "Nginx check failed"
+          
+          echo "✅ Deployment completed!"
+          echo "Your app should be available at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
