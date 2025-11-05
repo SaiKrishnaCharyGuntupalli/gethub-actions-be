@@ -120,7 +120,7 @@ jobs:
       - name: Build React app
         working-directory: /opt/fastapi_app/frontend
         run: |
-          npm run build
+          CI=false npm run build
 
       # STEP 12: Set Permissions for Nginx
       # Nginx needs to read the build files
