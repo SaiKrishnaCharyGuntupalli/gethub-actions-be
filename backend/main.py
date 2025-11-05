@@ -19,7 +19,7 @@ app.add_middleware(
 # Define a route (homepage)
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the FastAPI Application!!!! 🎉"}
+    return {"message": "Welcome to the FastAPI Application!!! 🎉"}
 
 
 # Define the request body model
@@ -30,7 +30,7 @@ class NameRequest(BaseModel):
 @app.post("/welcome")
 def welcome_user(data: NameRequest):
     return {
-        "message": f"Welcome {data.name}, know this application is yours!"
+        "message": f"Welcome {data.name}, now this application is yours!"
     }
 
 # AWS Lambda handler
